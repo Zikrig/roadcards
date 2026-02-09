@@ -17,7 +17,6 @@ from sqlalchemy import select
 from database.models import Transaction
 from bot.keyboards import get_user_main_menu, get_transactions_kb, get_back_to_list_kb
 from bot.utils import get_last_update_time
-from bot.utils import get_last_update_time
 import math
 
 router = Router()
@@ -52,6 +51,26 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
     # Если ссылки нет или она невалидна — обычный процесс
     await message.answer("Добро пожаловать! Пожалуйста, введите номер вашей топливной карты для регистрации.")
     await state.set_state(Registration.waiting_for_card)
+
+@router.message(Command("null"))
+async def cmd_null(message: Message, state: FSMContext):
+    user = await get_user_by_tg_id(message.from_user.id)
+    if not user:
+        await message.answer("Вы не зарегистрированы в системе.")
+        return
+    
+    card_number = user.card_number
+    async with async_session() as session:
+        from database.models import User
+        # Находим пользователя и удаляем его
+        result = await session.execute(select(User).where(User.telegram_id == message.from_user.id))
+        db_user = result.scalar_one_or_none()
+        if db_user:
+            await session.delete(db_user)
+            await session.commit()
+            
+    await state.clear()
+    await message.answer(f"Вы успешно разлогинены. Карта <code>{card_number}</code> теперь свободна для регистрации другим пользователем.", parse_mode="HTML")
 
 @router.message(Registration.waiting_for_card)
 async def process_card_number(message: Message, state: FSMContext):
@@ -180,4 +199,3 @@ async def main_menu_fallback(message: Message):
     user = await get_user_by_tg_id(message.from_user.id)
     if user:
         await message.answer(main_menu_text, reply_markup=get_user_main_menu())
-
