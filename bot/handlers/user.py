@@ -11,7 +11,8 @@ from database.db import (
     get_user_transactions, 
     count_user_transactions, 
     async_session, 
-    get_user_by_card
+    get_user_by_card,
+    get_all_user_cards
 )
 from sqlalchemy import select
 from database.models import Transaction
@@ -24,7 +25,10 @@ router = Router()
 class Registration(StatesGroup):
     waiting_for_card = State()
 
-main_menu_text = "Добро пожаловать! Здесь вы можете узнать о своем счете по топливным картам."
+main_menu_text = (
+    "Добро пожаловать! Здесь вы можете узнать о своем счете по топливным картам.\n\n"
+    "Чтобы добавить новую топливную карту, просто введите её номер в чат."
+)
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
@@ -59,18 +63,21 @@ async def cmd_null(message: Message, state: FSMContext):
         await message.answer("Вы не зарегистрированы в системе.")
         return
     
-    card_number = user.card_number
     async with async_session() as session:
         from database.models import User
-        # Находим пользователя и удаляем его
+        # Находим всех пользователей с этим telegram_id и удаляем их
         result = await session.execute(select(User).where(User.telegram_id == message.from_user.id))
-        db_user = result.scalar_one_or_none()
-        if db_user:
-            await session.delete(db_user)
-            await session.commit()
+        db_users = result.scalars().all()
+        
+        cards = [u.card_number for u in db_users]
+        
+        for u in db_users:
+            await session.delete(u)
+        await session.commit()
             
     await state.clear()
-    await message.answer(f"Вы успешно разлогинены. Карта <code>{card_number}</code> теперь свободна для регистрации другим пользователем.", parse_mode="HTML")
+    cards_str = ", ".join(cards)
+    await message.answer(f"Вы успешно разлогинены. Все ваши карты (<code>{cards_str}</code>) теперь свободны для регистрации.", parse_mode="HTML")
 
 @router.message(Registration.waiting_for_card)
 async def process_card_number(message: Message, state: FSMContext):
@@ -94,7 +101,7 @@ async def show_balance(callback: CallbackQuery):
     if not user:
         await callback.answer("Ошибка: пользователь не найден")
         return
-    balance = await get_user_balance(user.card_number)
+    balance = await get_user_balance(callback.from_user.id)
     
     last_update = get_last_update_time()
     
@@ -110,10 +117,15 @@ async def show_balance(callback: CallbackQuery):
 
 @router.callback_query(F.data == "user_requisites")
 async def show_requisites(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    cards = await get_all_user_cards(user_id)
+    cards_str = ", ".join(cards) if cards else "не привязаны"
+    
     text = (
         "💳 Реквизиты для оплаты:\n\n"
         "<code>2200 1545 0861 8864</code> Федаш Е. А.\n"
-        "Альфа банк"
+        "Альфа банк\n\n"
+        f"<i>Привязанные карты: {cards_str}</i>"
     )
     await callback.message.answer(text, reply_markup=get_user_main_menu(), parse_mode="HTML")
     await callback.answer()
@@ -126,13 +138,13 @@ async def show_transactions(callback: CallbackQuery, state: FSMContext):
         return
     
     await state.update_data(page=0)
-    await send_transaction_page(callback.message, user.card_number, 0)
+    await send_transaction_page(callback.message, callback.from_user.id, 0)
     await callback.answer()
 
-async def send_transaction_page(message: Message, card_number: str, page: int):
+async def send_transaction_page(message: Message, telegram_id: int, page: int):
     page_size = 10
-    transactions = await get_user_transactions(card_number, limit=page_size, offset=page * page_size)
-    total_count = await count_user_transactions(card_number)
+    transactions = await get_user_transactions(telegram_id, limit=page_size, offset=page * page_size)
+    total_count = await count_user_transactions(telegram_id)
     total_pages = math.ceil(total_count / page_size)
     
     kb = get_transactions_kb(transactions, page, total_pages)
@@ -153,8 +165,7 @@ async def process_back_to_menu(callback: CallbackQuery):
 async def process_pagination(callback: CallbackQuery, state: FSMContext):
     page = int(callback.data.split("_")[-1])
     await state.update_data(page=page)
-    user = await get_user_by_tg_id(callback.from_user.id)
-    await send_transaction_page(callback.message, user.card_number, page)
+    await send_transaction_page(callback.message, callback.from_user.id, page)
     await callback.answer()
 
 @router.callback_query(F.data.startswith("trans_details_"))

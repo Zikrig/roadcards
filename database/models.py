@@ -12,7 +12,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(BigInteger, unique=True, nullable=False)
+    telegram_id = Column(BigInteger, nullable=False) # Remove unique=True
     card_number = Column(String, unique=True, nullable=False)
     is_admin = Column(Boolean, default=False)
 

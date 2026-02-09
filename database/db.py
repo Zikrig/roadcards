@@ -14,8 +14,14 @@ async def init_db():
 
 async def get_user_by_tg_id(telegram_id: int) -> User:
     async with async_session() as session:
-        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+        # returns the first card found for this user
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id).limit(1))
         return result.scalar_one_or_none()
+
+async def get_all_user_cards(telegram_id: int):
+    async with async_session() as session:
+        result = await session.execute(select(User.card_number).where(User.telegram_id == telegram_id))
+        return result.scalars().all()
 
 async def get_user_by_card(card_number: str) -> User:
     async with async_session() as session:
@@ -41,41 +47,46 @@ async def add_to_whitelist(card_number: str):
             session.add(Whitelist(card_number=card_number))
             await session.commit()
 
-async def get_user_balance(card_number: str) -> float:
+async def get_user_balance(telegram_id: int) -> float:
     async with async_session() as session:
-        # Total debt = sum of expenses - sum of payments
-        # Actually, prompt says: "Счет клиента с этой Картой нужно пополнить на Стоимость, если это таблица трат клиентов или наоборот понизить, если это таблица оплат клиентов."
-        # This means:
-        # Balance = sum(cost where type=EXPENSE) - sum(cost where type=PAYMENT)
-        
+        cards = await get_all_user_cards(telegram_id)
+        if not cards:
+            return 0.0
+            
         result_expenses = await session.execute(
-            select(Transaction.cost).where(and_(Transaction.card_number == card_number, Transaction.type == TransactionType.EXPENSE))
+            select(Transaction.cost).where(and_(Transaction.card_number.in_(cards), Transaction.type == TransactionType.EXPENSE))
         )
         expenses = sum(r[0] for r in result_expenses.all())
 
         result_payments = await session.execute(
-            select(Transaction.cost).where(and_(Transaction.card_number == card_number, Transaction.type == TransactionType.PAYMENT))
+            select(Transaction.cost).where(and_(Transaction.card_number.in_(cards), Transaction.type == TransactionType.PAYMENT))
         )
         payments = sum(r[0] for r in result_payments.all())
         
         return expenses - payments
 
-async def get_user_transactions(card_number: str, limit: int = 10, offset: int = 0):
+async def get_user_transactions(telegram_id: int, limit: int = 10, offset: int = 0):
     async with async_session() as session:
+        cards = await get_all_user_cards(telegram_id)
+        if not cards:
+            return []
         result = await session.execute(
             select(Transaction)
-            .where(Transaction.card_number == card_number)
+            .where(Transaction.card_number.in_(cards))
             .order_by(Transaction.date.desc())
             .limit(limit)
             .offset(offset)
         )
         return result.scalars().all()
 
-async def count_user_transactions(card_number: str):
+async def count_user_transactions(telegram_id: int):
     async with async_session() as session:
+        cards = await get_all_user_cards(telegram_id)
+        if not cards:
+            return 0
         from sqlalchemy import func
         result = await session.execute(
-            select(func.count(Transaction.id)).where(Transaction.card_number == card_number)
+            select(func.count(Transaction.id)).where(Transaction.card_number.in_(cards))
         )
         return result.scalar()
 
