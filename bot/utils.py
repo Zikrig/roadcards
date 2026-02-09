@@ -29,3 +29,4 @@ def get_last_update_time():
         pass
     return "неизвестно"
 
+
