@@ -14,9 +14,9 @@ from database.db import (
     get_user_by_card,
     get_all_user_cards
 )
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from database.models import Transaction
-from bot.keyboards import get_user_main_menu, get_transactions_kb, get_back_to_list_kb
+from bot.keyboards import get_user_main_menu, get_transactions_kb, get_user_requisites_kb, get_user_delete_cards_kb
 from bot.utils import get_last_update_time
 import math
 
@@ -25,10 +25,7 @@ router = Router()
 class Registration(StatesGroup):
     waiting_for_card = State()
 
-main_menu_text = (
-    "Добро пожаловать! Здесь вы можете узнать о своем счете по топливным картам.\n\n"
-    "Чтобы добавить новую топливную карту, просто введите её номер в чат."
-)
+main_menu_text = "Добро пожаловать! Здесь вы можете узнать о своем счете по топливным картам."
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
@@ -127,8 +124,42 @@ async def show_requisites(callback: CallbackQuery):
         "Альфа банк\n\n"
         f"<i>Привязанные карты: {cards_str}</i>"
     )
-    await callback.message.answer(text, reply_markup=get_user_main_menu(), parse_mode="HTML")
+    await callback.message.edit_text(text, reply_markup=get_user_requisites_kb(), parse_mode="HTML")
     await callback.answer()
+
+@router.callback_query(F.data == "user_add_card")
+async def add_card_start(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("Пожалуйста, введите номер топливной карты, которую вы хотите добавить:")
+    await state.set_state(Registration.waiting_for_card)
+    await callback.answer()
+
+@router.callback_query(F.data == "user_del_card_list")
+async def del_card_list(callback: CallbackQuery):
+    cards = await get_all_user_cards(callback.from_user.id)
+    if not cards:
+        await callback.answer("У вас нет привязанных карт.")
+        return
+    await callback.message.edit_text("Выберите карту для удаления из вашего профиля:", reply_markup=get_user_delete_cards_kb(cards))
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("user_del_card_exec_"))
+async def del_card_exec(callback: CallbackQuery):
+    card_number = callback.data.split("_")[-1]
+    async with async_session() as session:
+        from database.models import User
+        result = await session.execute(
+            select(User).where(and_(User.telegram_id == callback.from_user.id, User.card_number == card_number))
+        )
+        db_user = result.scalar_one_or_none()
+        if db_user:
+            await session.delete(db_user)
+            await session.commit()
+            await callback.answer(f"Карта {card_number} удалена.")
+        else:
+            await callback.answer("Карта не найдена.")
+    
+    # Возвращаемся в реквизиты
+    await show_requisites(callback)
 
 @router.callback_query(F.data == "user_transactions")
 async def show_transactions(callback: CallbackQuery, state: FSMContext):
@@ -202,7 +233,12 @@ async def show_transaction_details(callback: CallbackQuery, state: FSMContext):
         data = await state.get_data()
         page = data.get("page", 0)
         
-        await callback.message.edit_text(text, reply_markup=get_back_to_list_kb(page))
+        # We need a back to list kb but let's define it or import if exists
+        from bot.keyboards import InlineKeyboardBuilder, InlineKeyboardButton
+        kb_builder = InlineKeyboardBuilder()
+        kb_builder.row(InlineKeyboardButton(text="Назад", callback_data=f"trans_page_{page}"))
+        
+        await callback.message.edit_text(text, reply_markup=kb_builder.as_markup())
         await callback.answer()
 
 @router.message()
