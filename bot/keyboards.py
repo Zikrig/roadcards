@@ -14,6 +14,7 @@ def get_admin_main_menu():
     builder.row(InlineKeyboardButton(text="Выгрузить сделки", callback_data="admin_export"))
     builder.row(InlineKeyboardButton(text="Рассылка всем", callback_data="admin_broadcast"))
     builder.row(InlineKeyboardButton(text="Создать ссылку регистрации", callback_data="admin_gen_link"))
+    builder.row(InlineKeyboardButton(text="Управление документами", callback_data="admin_docs"))
     return builder.as_markup()
 
 def get_report_type_kb():
@@ -26,6 +27,23 @@ def get_confirm_format_kb(report_type: str):
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="Да", callback_data=f"confirm_yes_{report_type}"))
     builder.row(InlineKeyboardButton(text="Нет", callback_data="confirm_no"))
+    return builder.as_markup()
+
+def get_documents_kb(documents: list[str]):
+    """
+    Клавиатура со списком документов (дампов).
+    Элементом callback будет индекс в списке: admin_doc_<idx>.
+    """
+    builder = InlineKeyboardBuilder()
+    for idx, doc in enumerate(documents):
+        short_name = doc[:30]
+        builder.row(
+            InlineKeyboardButton(
+                text=short_name,
+                callback_data=f"admin_doc_{idx}",
+            )
+        )
+    builder.row(InlineKeyboardButton(text="Назад", callback_data="admin_main"))
     return builder.as_markup()
 
 def get_transactions_kb(transactions, page, total_pages):

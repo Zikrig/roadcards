@@ -27,6 +27,8 @@ class Transaction(Base):
 
     id = Column(Integer, primary_key=True)
     card_number = Column(String, nullable=False)
+    # Название/метка документа (дампа), из которого загружена строка
+    document = Column(String, nullable=True)
     firm = Column(String)
     date = Column(DateTime, nullable=False)
     address = Column(String)

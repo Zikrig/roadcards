@@ -3,9 +3,14 @@ from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from bot.keyboards import get_admin_main_menu, get_report_type_kb, get_confirm_format_kb
+from bot.keyboards import (
+    get_admin_main_menu,
+    get_report_type_kb,
+    get_confirm_format_kb,
+    get_documents_kb,
+)
 from bot.utils import update_last_update_time
-from database.db import add_transaction, transaction_exists, add_to_whitelist, async_session
+from database.db import add_to_whitelist, async_session
 from database.models import Transaction, TransactionType
 import pandas as pd
 import io
@@ -26,6 +31,7 @@ class AdminState(StatesGroup):
     confirm_format_expense = State()
     confirm_format_payment = State()
     waiting_for_link_card = State()
+    waiting_for_document_choice = State()
 
 def is_admin(user_id: int):
     return user_id in ADMIN_IDS
@@ -42,6 +48,72 @@ async def process_upload_report(callback: CallbackQuery):
         await callback.answer("Доступ запрещен")
         return
     await callback.message.edit_text("Выберите тип отчета:", reply_markup=get_report_type_kb())
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_docs")
+async def list_documents(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Доступ запрещен")
+        return
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Transaction.document)
+            .where(Transaction.document.is_not(None))
+            .distinct()
+            .order_by(Transaction.document)
+        )
+        docs = [d for (d,) in result.all() if d]
+
+    if not docs:
+        await callback.message.edit_text("Документы (дампы) не найдены.")
+        await callback.answer()
+        return
+
+    await state.update_data(documents=docs)
+    await callback.message.edit_text(
+        "Выберите документ, который нужно отозвать:",
+        reply_markup=get_documents_kb(docs),
+    )
+    await state.set_state(AdminState.waiting_for_document_choice)
+    await callback.answer()
+
+@router.callback_query(AdminState.waiting_for_document_choice, F.data.startswith("admin_doc_"))
+async def revoke_document(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Доступ запрещен")
+        return
+
+    idx_str = callback.data.split("_")[-1]
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await callback.answer("Неверный формат выбора.")
+        return
+
+    data = await state.get_data()
+    docs = data.get("documents", [])
+    if idx < 0 or idx >= len(docs):
+        await callback.answer("Документ не найден.")
+        return
+
+    document_label = docs[idx]
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Transaction).where(Transaction.document == document_label)
+        )
+        txs = result.scalars().all()
+        deleted_count = len(txs)
+        for t in txs:
+            await session.delete(t)
+        await session.commit()
+
+    await callback.message.edit_text(
+        f"Документ «{document_label}» отозван. "
+        f"Удалено {deleted_count} записей из базы данных."
+    )
+    await state.clear()
     await callback.answer()
 
 @router.callback_query(F.data == "report_expense")
@@ -71,13 +143,13 @@ async def validate_format(file_content: bytes):
                
     return is_valid
 
-async def process_excel_expense(file_content: bytes):
+async def process_excel_expense(file_content: bytes, document: str):
     # Format: Фирма, карта, дата, адрес, наименование, количество, цена, стоимость
     df = pd.read_excel(io.BytesIO(file_content), skiprows=2, usecols="B:I")
     df.columns = ["firm", "card", "date", "address", "item_name", "quantity", "price", "cost"]
-    return await save_transactions(df, TransactionType.EXPENSE)
+    return await save_transactions(df, TransactionType.EXPENSE, document)
 
-async def process_excel_payment(file_content: bytes):
+async def process_excel_payment(file_content: bytes, document: str):
     # New format for payments: Дата, карта, имя, вид транзакции, стоимость
     df = pd.read_excel(io.BytesIO(file_content), skiprows=2, usecols="B:F")
     df.columns = ["date", "card", "item_name", "type_str", "cost"]
@@ -87,87 +159,148 @@ async def process_excel_payment(file_content: bytes):
     df["quantity"] = 1.0
     df["price"] = df["cost"]
     
-    return await save_transactions(df, TransactionType.PAYMENT)
+    return await save_transactions(df, TransactionType.PAYMENT, document)
 
-async def save_transactions(df, t_type: TransactionType):
+async def save_transactions(df, t_type: TransactionType, document: str):
+    """
+    Сохраняем транзакции с логикой:
+    - дубликат определяется по: карта, дата, тип, наименование, стоимость (округлённая до целого);
+    - если в БД уже есть любая строка с той же картой и датой (даже если остальные поля отличаются),
+      добавляем предупреждение с номером строки и 4 полями.
+    """
     df = df.dropna(subset=["card", "date"])
     added_count = 0
     skipped_count = 0
-    
-    for _, row in df.iterrows():
-        card_number = str(row["card"])
-        date = row["date"]
-        
-        if isinstance(date, str):
-            for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M"):
-                try:
-                    date = datetime.strptime(date, fmt)
-                    break
-                except:
-                    continue
-        
-        if await transaction_exists(card_number, date, t_type):
-            skipped_count += 1
-            continue
-            
-        await add_to_whitelist(card_number)
-        
-        await add_transaction({
-            "card_number": card_number,
-            "firm": str(row.get("firm", "")),
-            "date": date,
-            "address": str(row.get("address", "")),
-            "item_name": str(row["item_name"]),
-            "quantity": float(row.get("quantity", 0)),
-            "price": float(row.get("price", 0)),
-            "cost": float(row["cost"]),
-            "type": t_type
-        })
-        added_count += 1
-    return added_count, skipped_count
+    warnings = []
+
+    async with async_session() as session:
+        for idx, row in df.iterrows():
+            card_number = str(row["card"])
+            date = row["date"]
+
+            if isinstance(date, str):
+                for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M"):
+                    try:
+                        date = datetime.strptime(date, fmt)
+                        break
+                    except Exception:
+                        continue
+
+            cost_val = float(row["cost"])
+            rounded_cost = int(round(cost_val))
+            item_name = str(row["item_name"])
+
+            # Все существующие сделки с такой же картой и датой
+            result = await session.execute(
+                select(Transaction).where(
+                    and_(
+                        Transaction.card_number == card_number,
+                        Transaction.date == date,
+                    )
+                )
+            )
+            existing = result.scalars().all()
+
+            is_duplicate = False
+            if existing:
+                # Проверяем дубликат по всем 4 полям
+                for t in existing:
+                    if (
+                        t.type == t_type
+                        and (t.item_name or "") == item_name
+                        and int(round(t.cost)) == rounded_cost
+                    ):
+                        is_duplicate = True
+                        break
+
+                # Всегда добавляем предупреждение о совпадении карты и даты
+                excel_row = idx + 4  # данные начинаются с 4-й строки в Excel
+                warnings.append(
+                    {
+                        "row": excel_row,
+                        "card": card_number,
+                        "date": date,
+                        "item_name": item_name,
+                        "cost_rounded": rounded_cost,
+                    }
+                )
+
+            if is_duplicate:
+                skipped_count += 1
+                continue
+
+            await add_to_whitelist(card_number)
+
+            session.add(
+                Transaction(
+                    card_number=card_number,
+                    document=document,
+                    firm=str(row.get("firm", "")),
+                    date=date,
+                    address=str(row.get("address", "")),
+                    item_name=item_name,
+                    quantity=float(row.get("quantity", 0)),
+                    price=float(row.get("price", 0)),
+                    cost=cost_val,
+                    type=t_type,
+                )
+            )
+            added_count += 1
+
+        await session.commit()
+
+    return added_count, skipped_count, warnings
 
 @router.message(AdminState.waiting_for_expense_file, F.document)
 async def handle_expense_file(message: Message, state: FSMContext, bot: Bot):
     file_id = message.document.file_id
+    file_name = message.document.file_name or "report"
     file = await bot.get_file(file_id)
     file_content = await bot.download_file(file.file_path)
     content_bytes = file_content.read()
+    # формируем метку документа: первые 10 символов имени + текущий момент в SQL-формате
+    now = datetime.now()
+    document_label = f"{file_name[:10]}_{now.strftime('%Y-%m-%d %H:%M:%S')}"
     
-    await state.update_data(file_bytes=content_bytes)
+    await state.update_data(file_bytes=content_bytes, document=document_label)
     
     if not await validate_format(content_bytes):
         await message.answer("Точно ли таблица в нужном формате? (B2 и A3 должны быть пустыми, B3 — заполнено)", 
                            reply_markup=get_confirm_format_kb("expense"))
         await state.set_state(AdminState.confirm_format_expense)
     else:
-        await do_process_expense(message, state, content_bytes)
+        await do_process_expense(message, state, content_bytes, document_label)
 
 @router.message(AdminState.waiting_for_payment_file, F.document)
 async def handle_payment_file(message: Message, state: FSMContext, bot: Bot):
     file_id = message.document.file_id
+    file_name = message.document.file_name or "report"
     file = await bot.get_file(file_id)
     file_content = await bot.download_file(file.file_path)
     content_bytes = file_content.read()
+    now = datetime.now()
+    document_label = f"{file_name[:10]}_{now.strftime('%Y-%m-%d %H:%M:%S')}"
     
-    await state.update_data(file_bytes=content_bytes)
+    await state.update_data(file_bytes=content_bytes, document=document_label)
     
     if not await validate_format(content_bytes):
         await message.answer("Точно ли таблица в нужном формате? (B2 и A3 должны быть пустыми, B3 — заполнено)", 
                            reply_markup=get_confirm_format_kb("payment"))
         await state.set_state(AdminState.confirm_format_payment)
     else:
-        await do_process_payment(message, state, content_bytes)
+        await do_process_payment(message, state, content_bytes, document_label)
 
 @router.callback_query(F.data.startswith("confirm_yes_"))
 async def confirm_yes(callback: CallbackQuery, state: FSMContext):
     report_type = callback.data.split("_")[-1]
     data = await state.get_data()
     content_bytes = data.get("file_bytes")
+    document_label = data.get("document", "unknown")
     
     if report_type == "expense":
-        await do_process_expense(callback.message, state, content_bytes)
+        await do_process_expense(callback.message, state, content_bytes, document_label)
     else:
-        await do_process_payment(callback.message, state, content_bytes)
+        await do_process_payment(callback.message, state, content_bytes, document_label)
     await callback.answer()
 
 @router.callback_query(F.data == "confirm_no")
@@ -178,20 +311,50 @@ async def confirm_no(callback: CallbackQuery, state: FSMContext):
 
 from bot.utils import update_last_update_time
 
-async def do_process_expense(message, state, content_bytes):
+async def do_process_expense(message, state, content_bytes, document_label: str):
     try:
-        added, skipped = await process_excel_expense(content_bytes)
+        added, skipped, warnings = await process_excel_expense(content_bytes, document_label)
         update_last_update_time() # Обновляем время
-        await message.answer(f"Обработка трат завершена.\nДобавлено: {added}\nПропущено: {skipped}")
+        text = f"Обработка трат завершена.\nДобавлено: {added}\nПропущено (дубликаты): {skipped}"
+
+        if warnings:
+            text += "\n\n⚠️ Найдены строки с совпадающими номером карты и датой:\n"
+            for w in warnings:
+                dt_str = (
+                    w["date"].strftime("%d.%m.%Y %H:%M")
+                    if isinstance(w["date"], datetime)
+                    else str(w["date"])
+                )
+                text += (
+                    f"Строка {w['row']}: карта {w['card']}, дата {dt_str}, "
+                    f"наименование/вид: {w['item_name']}, стоимость (округлённо): {w['cost_rounded']}\n"
+                )
+
+        await message.answer(text)
     except Exception as e:
         await message.answer(f"Ошибка: {e}")
     await state.clear()
 
 async def do_process_payment(message, state, content_bytes):
     try:
-        added, skipped = await process_excel_payment(content_bytes)
+        added, skipped, warnings = await process_excel_payment(content_bytes, document_label)
         update_last_update_time() # Обновляем время
-        await message.answer(f"Обработка оплат завершена.\nДобавлено: {added}\nПропущено: {skipped}")
+        text = f"Обработка оплат завершена.\nДобавлено: {added}\nПропущено (дубликаты): {skipped}"
+
+        if warnings:
+            text += "\n\n⚠️ Найдены строки с совпадающими номером карты и датой:\n"
+            for w in warnings:
+                dt_str = (
+                    w["date"].strftime("%d.%m.%Y %H:%M")
+                    if isinstance(w["date"], datetime)
+                    else str(w["date"])
+                )
+                text += (
+                    f"Строка {w['row']}: карта {w['card']}, дата {dt_str}, "
+                    f"наименование/вид: {w['item_name']}, стоимость (округлённо): {w['cost_rounded']}\n"
+                )
+
+        await message.answer(text)
     except Exception as e:
         await message.answer(f"Ошибка: {e}")
     await state.clear()
