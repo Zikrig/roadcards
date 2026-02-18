@@ -335,7 +335,7 @@ async def do_process_expense(message, state, content_bytes, document_label: str)
         await message.answer(f"Ошибка: {e}")
     await state.clear()
 
-async def do_process_payment(message, state, content_bytes):
+async def do_process_payment(message, state, content_bytes, document_label: str):
     try:
         added, skipped, warnings = await process_excel_payment(content_bytes, document_label)
         update_last_update_time() # Обновляем время
