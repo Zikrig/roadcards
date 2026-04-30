@@ -67,7 +67,7 @@ main_menu_text = (
 
 
 def parse_cards_from_text(raw_value: str) -> list[str]:
-    cards = [c.strip() for c in re.split(r"[,;|\s]+", raw_value or "") if c.strip()]
+    cards = [c.strip() for c in re.split(r"[,&;|\s]+", raw_value or "") if c.strip()]
     unique_cards = []
     seen = set()
     for card in cards:
@@ -88,8 +88,6 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         card_numbers = parse_cards_from_text(command.args.strip())
         if not card_numbers:
             await message.answer("Ссылка регистрации не содержит номер карты.")
-        elif len(card_numbers) > 2:
-            await message.answer("Ссылка может содержать не более двух карт.")
         else:
             missing_cards = []
             occupied_cards = []

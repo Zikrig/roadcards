@@ -20,6 +20,7 @@ from datetime import datetime
 from sqlalchemy import select, and_
 from config import ADMIN_IDS
 import re
+from urllib.parse import quote
 
 router = Router()
 
@@ -426,7 +427,7 @@ async def gen_link_start(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Доступ запрещен")
         return
     await callback.message.answer(
-        "Введите номер одной карты или двух карт через запятую, для которых нужно создать ссылку:"
+        "Введите номер одной или нескольких карт через запятую, для которых нужно создать ссылку:"
     )
     await state.set_state(AdminState.waiting_for_link_card)
     await callback.answer()
@@ -438,16 +439,14 @@ async def gen_link_process(message: Message, state: FSMContext, bot: Bot):
     
     cards = parse_cards_from_text(message.text.strip())
     if not cards:
-        await message.answer("Не удалось определить номер карты. Введите одну карту или две через запятую.")
-        return
-    if len(cards) > 2:
-        await message.answer("Можно создать ссылку максимум для двух карт.")
+        await message.answer("Не удалось определить номер карты. Введите одну или несколько карт через запятую.")
         return
 
-    start_arg = ",".join(cards)
+    start_arg = "&".join(cards)
+    encoded_start_arg = quote(start_arg, safe="")
     # Получаем имя бота для формирования ссылки
     bot_info = await bot.get_me()
-    link = f"https://t.me/{bot_info.username}?start={start_arg}"
+    link = f"https://t.me/{bot_info.username}?start={encoded_start_arg}"
 
     cards_str = ", ".join(cards)
     await message.answer(f"Ссылка для регистрации по картам {cards_str}:\n\n<code>{link}</code>", parse_mode="HTML")
