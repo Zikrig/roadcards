@@ -78,6 +78,15 @@ async def list_documents(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_for_document_choice)
     await callback.answer()
 
+@router.callback_query(F.data == "admin_main")
+async def process_admin_main(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Доступ запрещен")
+        return
+    await state.clear()
+    await callback.message.edit_text("Админ-панель:", reply_markup=get_admin_main_menu())
+    await callback.answer()
+
 @router.callback_query(AdminState.waiting_for_document_choice, F.data.startswith("admin_doc_"))
 async def revoke_document(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
