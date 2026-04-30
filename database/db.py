@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func, extract
 from .models import Base, User, Whitelist, Transaction, TransactionType
 import os
 
@@ -119,6 +119,65 @@ async def count_user_transactions(telegram_id: int):
             )
         )
         return result.scalar()
+
+
+async def get_user_expense_stats(telegram_id: int):
+    async with async_session() as session:
+        cards = await get_all_user_cards(telegram_id)
+        if not cards:
+            return {
+                "total_liters": 0.0,
+                "total_cost": 0.0,
+                "total_count": 0,
+                "monthly": [],
+            }
+
+        base_filters = and_(
+            Transaction.card_number.in_(cards),
+            Transaction.type == TransactionType.EXPENSE,
+        )
+
+        total_result = await session.execute(
+            select(
+                func.coalesce(func.sum(Transaction.quantity), 0.0),
+                func.coalesce(func.sum(Transaction.cost), 0.0),
+                func.count(Transaction.id),
+            ).where(base_filters)
+        )
+        total_liters, total_cost, total_count = total_result.one()
+
+        monthly_result = await session.execute(
+            select(
+                extract("year", Transaction.date).label("year"),
+                extract("month", Transaction.date).label("month"),
+                func.coalesce(func.sum(Transaction.quantity), 0.0).label("liters"),
+                func.coalesce(func.sum(Transaction.cost), 0.0).label("cost"),
+            )
+            .where(base_filters)
+            .group_by("year", "month")
+            .order_by(
+                extract("year", Transaction.date).desc(),
+                extract("month", Transaction.date).desc(),
+            )
+        )
+
+        monthly = []
+        for year, month, liters, cost in monthly_result.all():
+            monthly.append(
+                {
+                    "year": int(year),
+                    "month": int(month),
+                    "liters": float(liters or 0),
+                    "cost": float(cost or 0),
+                }
+            )
+
+        return {
+            "total_liters": float(total_liters or 0),
+            "total_cost": float(total_cost or 0),
+            "total_count": int(total_count or 0),
+            "monthly": monthly,
+        }
 
 
 async def add_transaction(data: dict):

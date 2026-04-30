@@ -10,13 +10,20 @@ from database.db import (
     get_user_balance, 
     get_user_transactions, 
     count_user_transactions, 
+    get_user_expense_stats,
     async_session, 
     get_user_by_card,
     get_all_user_cards
 )
 from sqlalchemy import select, and_
 from database.models import Transaction
-from bot.keyboards import get_user_main_menu, get_transactions_kb, get_user_requisites_kb, get_user_delete_cards_kb
+from bot.keyboards import (
+    get_user_main_menu,
+    get_transactions_kb,
+    get_user_requisites_kb,
+    get_user_delete_cards_kb,
+    get_user_my_cards_kb,
+)
 from bot.utils import get_last_update_time
 import math
 
@@ -25,13 +32,43 @@ router = Router()
 class Registration(StatesGroup):
     waiting_for_card = State()
 
-main_menu_text = "Добро пожаловать! Здесь вы можете узнать о своем счете по топливным картам."
+
+MONTH_NAMES_RU = {
+    1: "Январь",
+    2: "Февраль",
+    3: "Март",
+    4: "Апрель",
+    5: "Май",
+    6: "Июнь",
+    7: "Июль",
+    8: "Август",
+    9: "Сентябрь",
+    10: "Октябрь",
+    11: "Ноябрь",
+    12: "Декабрь",
+}
+
+
+def format_number(value: float) -> str:
+    if abs(value - round(value)) < 1e-9:
+        return f"{int(round(value)):,}".replace(",", " ")
+    return f"{value:,.2f}".replace(",", " ").replace(".", ",")
+
+main_menu_text = (
+    "Здравствуйте!\n"
+    "Рады видеть вас в боте <b>Toplex</b>. Это ваш личный помощник по топливным картам — "
+    "баланс, чеки, отчеты и связь с менеджером в одном месте.\n\n"
+    "<b>3 шага для начала:</b>\n"
+    "1. Изучите меню ниже — посмотрите, что умеет бот\n"
+    "2. Если у вас есть <b>вторая карта</b> — добавьте ее в разделе «<b>Мои карты</b>»\n"
+    "3. Возник вопрос? Напишите менеджеру в Telegram — @ToplexM"
+)
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
     user = await get_user_by_tg_id(message.from_user.id)
     if user:
-        await message.answer(main_menu_text, reply_markup=get_user_main_menu())
+        await message.answer(main_menu_text, reply_markup=get_user_main_menu(), parse_mode="HTML")
         return
 
     # Проверка на наличие аргумента в ссылке (Deep Linking)
@@ -114,17 +151,24 @@ async def show_balance(callback: CallbackQuery):
 
 @router.callback_query(F.data == "user_requisites")
 async def show_requisites(callback: CallbackQuery):
+    text = (
+        "💳 Реквизиты для оплаты:\n\n"
+        "<code>2200 2479 6490 8215</code> Федаш Е. А.\n"
+        "ВТБ банк\n\n"
+        "<code>2202 2061 5142 4897</code> Федаш Е. А.\n"
+        "Сбер банк\n\n"
+        "Для пополнения баланса наличными обращайтесь к менеджеру @ToplexM"
+    )
+    await callback.message.edit_text(text, reply_markup=get_user_requisites_kb(), parse_mode="HTML")
+    await callback.answer()
+
+@router.callback_query(F.data == "user_my_cards")
+async def show_my_cards(callback: CallbackQuery):
     user_id = callback.from_user.id
     cards = await get_all_user_cards(user_id)
     cards_str = ", ".join(cards) if cards else "не привязаны"
-    
-    text = (
-        "💳 Реквизиты для оплаты:\n\n"
-        "<code>2200 1545 0861 8864</code> Федаш Е. А.\n"
-        "Альфа банк\n\n"
-        f"<i>Привязанные карты: {cards_str}</i>"
-    )
-    await callback.message.edit_text(text, reply_markup=get_user_requisites_kb(), parse_mode="HTML")
+    text = f"🧾 Мои карты:\n\n<i>{cards_str}</i>"
+    await callback.message.edit_text(text, reply_markup=get_user_my_cards_kb(), parse_mode="HTML")
     await callback.answer()
 
 @router.callback_query(F.data == "user_add_card")
@@ -158,8 +202,8 @@ async def del_card_exec(callback: CallbackQuery):
         else:
             await callback.answer("Карта не найдена.")
     
-    # Возвращаемся в реквизиты
-    await show_requisites(callback)
+    # Возвращаемся в "Мои карты"
+    await show_my_cards(callback)
 
 @router.callback_query(F.data == "user_transactions")
 async def show_transactions(callback: CallbackQuery, state: FSMContext):
@@ -177,19 +221,45 @@ async def send_transaction_page(message: Message, telegram_id: int, page: int):
     transactions = await get_user_transactions(telegram_id, limit=page_size, offset=page * page_size)
     total_count = await count_user_transactions(telegram_id)
     total_pages = math.ceil(total_count / page_size)
+    stats = await get_user_expense_stats(telegram_id)
     
     kb = get_transactions_kb(transactions, page, total_pages)
-    text = f"Ваши сделки (страница {page + 1} из {max(1, total_pages)}):"
+    stats_text = (
+        "📊 Ваша статистика заправок:\n\n"
+        f"⛽ Итого заправлено: {format_number(stats['total_liters'])} л\n"
+        f"💰 Общая сумма: {format_number(stats['total_cost'])} ₽\n"
+        f"🧾 Количество заправок: {stats['total_count']}\n"
+    )
+
+    if stats["monthly"]:
+        stats_text += "\n📅 По месяцам:\n"
+        current_year = None
+        for item in stats["monthly"]:
+            year = item["year"]
+            month = item["month"]
+            liters = item["liters"]
+            cost = item["cost"]
+            if year != current_year:
+                current_year = year
+                stats_text += f"\n{year} г.:\n"
+            month_name = MONTH_NAMES_RU.get(month, str(month))
+            stats_text += f"• {month_name}: {format_number(liters)} л ({format_number(cost)} ₽)\n"
+
+    stats_text += f"\n\nВаши сделки (страница {page + 1} из {max(1, total_pages)}):"
     
     # We always use edit_text or answer a new message with the menu
-    if message.text.startswith("Ваши сделки") or message.text == main_menu_text:
-        await message.edit_text(text, reply_markup=kb)
+    if (
+        message.text.startswith("Ваши сделки")
+        or message.text.startswith("Здравствуйте!")
+        or message.text.startswith("📊 Ваша статистика заправок:")
+    ):
+        await message.edit_text(stats_text, reply_markup=kb)
     else:
-        await message.answer(text, reply_markup=kb)
+        await message.answer(stats_text, reply_markup=kb)
 
 @router.callback_query(F.data == "user_main_menu")
 async def process_back_to_menu(callback: CallbackQuery):
-    await callback.message.edit_text(main_menu_text, reply_markup=get_user_main_menu())
+    await callback.message.edit_text(main_menu_text, reply_markup=get_user_main_menu(), parse_mode="HTML")
     await callback.answer()
 
 @router.callback_query(F.data.startswith("trans_page_"))
@@ -216,7 +286,7 @@ async def show_transaction_details(callback: CallbackQuery, state: FSMContext):
                 f"Карта: {transaction.card_number}\n"
                 f"Дата: {transaction.date.strftime('%d.%m.%Y %H:%M')}\n"
                 f"Имя: {transaction.item_name}\n"
-                f"Вид транзакции: Трата\n"
+                f"Вид транзакции: Списание\n"
                 f"Стоимость: {transaction.cost:.2f} руб."
             )
         else:
@@ -226,7 +296,7 @@ async def show_transaction_details(callback: CallbackQuery, state: FSMContext):
                 f"Карта: {transaction.card_number}\n"
                 f"Дата: {transaction.date.strftime('%d.%m.%Y %H:%M')}\n"
                 f"Имя: {transaction.item_name}\n"
-                f"Вид транзакции: Оплата\n"
+                f"Вид транзакции: Пополнение\n"
                 f"Стоимость: {transaction.cost:.2f} руб."
             )
         
@@ -245,4 +315,4 @@ async def show_transaction_details(callback: CallbackQuery, state: FSMContext):
 async def main_menu_fallback(message: Message):
     user = await get_user_by_tg_id(message.from_user.id)
     if user:
-        await message.answer(main_menu_text, reply_markup=get_user_main_menu())
+        await message.answer(main_menu_text, reply_markup=get_user_main_menu(), parse_mode="HTML")

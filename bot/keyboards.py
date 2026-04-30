@@ -72,8 +72,15 @@ def get_transactions_kb(transactions, page, total_pages):
 
 def get_user_requisites_kb():
     builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🧾 Мои карты", callback_data="user_my_cards"))
+    builder.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="user_main_menu"))
+    return builder.as_markup()
+
+def get_user_my_cards_kb():
+    builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="➕ Добавить ТК", callback_data="user_add_card"))
     builder.row(InlineKeyboardButton(text="❌ Удалить ТК", callback_data="user_del_card_list"))
+    builder.row(InlineKeyboardButton(text="💳 Реквизиты", callback_data="user_requisites"))
     builder.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="user_main_menu"))
     return builder.as_markup()
 
@@ -81,6 +88,6 @@ def get_user_delete_cards_kb(cards):
     builder = InlineKeyboardBuilder()
     for card in cards:
         builder.row(InlineKeyboardButton(text=f"Удалить {card}", callback_data=f"user_del_card_exec_{card}"))
-    builder.row(InlineKeyboardButton(text="Назад", callback_data="user_requisites"))
+    builder.row(InlineKeyboardButton(text="Назад", callback_data="user_my_cards"))
     return builder.as_markup()
 
