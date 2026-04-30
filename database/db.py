@@ -88,7 +88,8 @@ async def get_user_balance(telegram_id: int) -> float:
         )
         payments = sum(r[0] for r in result_payments.all())
 
-        return expenses - payments
+        # Баланс: положительный в плюсе, отрицательный при долге
+        return payments - expenses
 
 
 async def get_user_transactions(telegram_id: int, limit: int = 10, offset: int = 0):
