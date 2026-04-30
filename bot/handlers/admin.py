@@ -20,7 +20,6 @@ from datetime import datetime
 from sqlalchemy import select, and_
 from config import ADMIN_IDS
 import re
-from urllib.parse import quote
 
 router = Router()
 
@@ -442,10 +441,10 @@ async def gen_link_process(message: Message, state: FSMContext, bot: Bot):
         await message.answer("Не удалось определить номер карты. Введите одну или несколько карт через запятую.")
         return
 
-    start_arg = "&".join(cards)
+    start_arg = "-".join(cards)
     # Получаем имя бота для формирования ссылки
     bot_info = await bot.get_me()
-    link = f"https://t.me/{bot_info.username}?start={quote(start_arg, safe='')}"
+    link = f"https://t.me/{bot_info.username}?start={start_arg}"
 
     cards_str = ", ".join(cards)
     await message.answer(f"Ссылка для регистрации по картам {cards_str}:\n\n<code>{link}</code>", parse_mode="HTML")

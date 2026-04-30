@@ -67,7 +67,7 @@ main_menu_text = (
 
 
 def parse_cards_from_text(raw_value: str) -> list[str]:
-    cards = [c.strip() for c in re.split(r"[,&;|\s]+", raw_value or "") if c.strip()]
+    cards = [c.strip() for c in re.split(r"[,%&;|\s-]+", raw_value or "") if c.strip()]
     unique_cards = []
     seen = set()
     for card in cards:
