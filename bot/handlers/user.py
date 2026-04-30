@@ -153,6 +153,8 @@ async def show_balance(callback: CallbackQuery):
 async def show_requisites(callback: CallbackQuery):
     text = (
         "💳 Реквизиты для оплаты:\n\n"
+        "<code>2200 1545 0861 8864</code> Федаш Е. А.\n"
+        "Альфа банк\n\n"
         "<code>2200 2479 6490 8215</code> Федаш Е. А.\n"
         "ВТБ банк\n\n"
         "<code>2202 2061 5142 4897</code> Федаш Е. А.\n"
