@@ -172,7 +172,7 @@ async def show_balance(callback: CallbackQuery):
     if balance < 0:
         text = f"Ваш баланс: +{abs(balance):.2f} рублей"
     else:
-        text = f"Ваш баланс к оплате: {balance:.2f} рублей"
+        text = f"Ваш баланс: {balance:.2f} рублей"
     
     text += f"\n\n🕒 Данные обновлены {last_update}"
         
