@@ -80,7 +80,6 @@ def get_user_my_cards_kb():
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="➕ Добавить ТК", callback_data="user_add_card"))
     builder.row(InlineKeyboardButton(text="❌ Удалить ТК", callback_data="user_del_card_list"))
-    builder.row(InlineKeyboardButton(text="💳 Реквизиты", callback_data="user_requisites"))
     builder.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="user_main_menu"))
     return builder.as_markup()
 
