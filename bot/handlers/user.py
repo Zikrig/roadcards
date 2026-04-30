@@ -26,6 +26,7 @@ from bot.keyboards import (
 )
 from bot.utils import get_last_update_time
 import math
+import re
 
 router = Router()
 
@@ -64,6 +65,17 @@ main_menu_text = (
     "3. Возник вопрос? Напишите менеджеру в Telegram — @ToplexM"
 )
 
+
+def parse_cards_from_text(raw_value: str) -> list[str]:
+    cards = [c.strip() for c in re.split(r"[,;|\s]+", raw_value or "") if c.strip()]
+    unique_cards = []
+    seen = set()
+    for card in cards:
+        if card not in seen:
+            seen.add(card)
+            unique_cards.append(card)
+    return unique_cards
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
     user = await get_user_by_tg_id(message.from_user.id)
@@ -73,18 +85,38 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
 
     # Проверка на наличие аргумента в ссылке (Deep Linking)
     if command.args:
-        card_number = command.args.strip()
-        if await is_in_whitelist(card_number):
-            existing_user = await get_user_by_card(card_number)
-            if existing_user:
-                await message.answer("Этот номер карты из ссылки уже зарегистрирован другим пользователем.")
+        card_numbers = parse_cards_from_text(command.args.strip())
+        if not card_numbers:
+            await message.answer("Ссылка регистрации не содержит номер карты.")
+        elif len(card_numbers) > 2:
+            await message.answer("Ссылка может содержать не более двух карт.")
+        else:
+            missing_cards = []
+            occupied_cards = []
+            for card_number in card_numbers:
+                if not await is_in_whitelist(card_number):
+                    missing_cards.append(card_number)
+                    continue
+                existing_user = await get_user_by_card(card_number)
+                if existing_user:
+                    occupied_cards.append(card_number)
+
+            if missing_cards:
+                cards_str = ", ".join(missing_cards)
+                await message.answer(f"Карты из ссылки не найдены в белом списке: {cards_str}.")
+            elif occupied_cards:
+                cards_str = ", ".join(occupied_cards)
+                await message.answer(f"Карты из ссылки уже зарегистрированы другим пользователем: {cards_str}.")
             else:
-                await register_user(message.from_user.id, card_number)
-                await message.answer(f"Регистрация по карте {card_number} прошла успешно!", reply_markup=get_user_main_menu())
+                for card_number in card_numbers:
+                    await register_user(message.from_user.id, card_number)
+                cards_str = ", ".join(card_numbers)
+                await message.answer(
+                    f"Регистрация по картам {cards_str} прошла успешно!",
+                    reply_markup=get_user_main_menu()
+                )
                 await state.clear()
                 return
-        else:
-            await message.answer("Карта из ссылки не найдена в белом списке.")
 
     # Если ссылки нет или она невалидна — обычный процесс
     await message.answer("Добро пожаловать! Пожалуйста, введите номер вашей топливной карты для регистрации.")
@@ -140,9 +172,9 @@ async def show_balance(callback: CallbackQuery):
     last_update = get_last_update_time()
     
     if balance < 0:
-        text = f"Отлично. Вы в плюсе на {abs(balance):.2f} рублей"
+        text = f"Ваш баланс: +{abs(balance):.2f} рублей"
     else:
-        text = f"С вас {balance:.2f} рублей"
+        text = f"Ваш баланс к оплате: {balance:.2f} рублей"
     
     text += f"\n\n🕒 Данные обновлены {last_update}"
         

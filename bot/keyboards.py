@@ -4,8 +4,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 def get_user_main_menu():
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📊 Статистика", callback_data="user_transactions"))
+    builder.row(InlineKeyboardButton(text="🧾 Мои карты", callback_data="user_my_cards"))
     builder.row(InlineKeyboardButton(text="💳 Реквизиты для оплаты", callback_data="user_requisites"))
-    builder.row(InlineKeyboardButton(text="💰 Моя задолженность", callback_data="user_balance"))
+    builder.row(InlineKeyboardButton(text="💰 Ваш баланс", callback_data="user_balance"))
     return builder.as_markup()
 
 def get_admin_main_menu():
@@ -72,7 +73,6 @@ def get_transactions_kb(transactions, page, total_pages):
 
 def get_user_requisites_kb():
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🧾 Мои карты", callback_data="user_my_cards"))
     builder.row(InlineKeyboardButton(text="🏠 В главное меню", callback_data="user_main_menu"))
     return builder.as_markup()
 

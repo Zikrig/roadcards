@@ -19,6 +19,7 @@ import openpyxl
 from datetime import datetime
 from sqlalchemy import select, and_
 from config import ADMIN_IDS
+import re
 
 router = Router()
 
@@ -32,6 +33,17 @@ class AdminState(StatesGroup):
     confirm_format_payment = State()
     waiting_for_link_card = State()
     waiting_for_document_choice = State()
+
+
+def parse_cards_from_text(raw_value: str) -> list[str]:
+    cards = [c.strip() for c in re.split(r"[,;|\s]+", raw_value or "") if c.strip()]
+    unique_cards = []
+    seen = set()
+    for card in cards:
+        if card not in seen:
+            seen.add(card)
+            unique_cards.append(card)
+    return unique_cards
 
 def is_admin(user_id: int):
     return user_id in ADMIN_IDS
@@ -413,7 +425,9 @@ async def gen_link_start(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("Доступ запрещен")
         return
-    await callback.message.answer("Введите номер карты, для которой нужно создать ссылку:")
+    await callback.message.answer(
+        "Введите номер одной карты или двух карт через запятую, для которых нужно создать ссылку:"
+    )
     await state.set_state(AdminState.waiting_for_link_card)
     await callback.answer()
 
@@ -422,12 +436,21 @@ async def gen_link_process(message: Message, state: FSMContext, bot: Bot):
     if not is_admin(message.from_user.id):
         return
     
-    card_number = message.text.strip()
+    cards = parse_cards_from_text(message.text.strip())
+    if not cards:
+        await message.answer("Не удалось определить номер карты. Введите одну карту или две через запятую.")
+        return
+    if len(cards) > 2:
+        await message.answer("Можно создать ссылку максимум для двух карт.")
+        return
+
+    start_arg = ",".join(cards)
     # Получаем имя бота для формирования ссылки
     bot_info = await bot.get_me()
-    link = f"https://t.me/{bot_info.username}?start={card_number}"
-    
-    await message.answer(f"Ссылка для регистрации по карте {card_number}:\n\n<code>{link}</code>", parse_mode="HTML")
+    link = f"https://t.me/{bot_info.username}?start={start_arg}"
+
+    cards_str = ", ".join(cards)
+    await message.answer(f"Ссылка для регистрации по картам {cards_str}:\n\n<code>{link}</code>", parse_mode="HTML")
     await state.clear()
 
 @router.message(AdminState.waiting_for_export_start_date)
