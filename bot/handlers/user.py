@@ -5,7 +5,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from database.db import (
     get_user_by_tg_id, 
-    is_in_whitelist, 
     register_user, 
     get_user_balance, 
     get_user_transactions, 
@@ -89,20 +88,13 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
         if not card_numbers:
             await message.answer("Ссылка регистрации не содержит номер карты.")
         else:
-            missing_cards = []
             occupied_cards = []
             for card_number in card_numbers:
-                if not await is_in_whitelist(card_number):
-                    missing_cards.append(card_number)
-                    continue
                 existing_user = await get_user_by_card(card_number)
                 if existing_user:
                     occupied_cards.append(card_number)
 
-            if missing_cards:
-                cards_str = ", ".join(missing_cards)
-                await message.answer(f"Карты из ссылки не найдены в белом списке: {cards_str}.")
-            elif occupied_cards:
+            if occupied_cards:
                 cards_str = ", ".join(occupied_cards)
                 await message.answer(f"Карты из ссылки уже зарегистрированы другим пользователем: {cards_str}.")
             else:
@@ -146,18 +138,15 @@ async def cmd_null(message: Message, state: FSMContext):
 @router.message(Registration.waiting_for_card)
 async def process_card_number(message: Message, state: FSMContext):
     card_number = message.text.strip()
-    if await is_in_whitelist(card_number):
-        # Проверяем, не занята ли уже эта карта кем-то другим
-        existing_user = await get_user_by_card(card_number)
-        if existing_user:
-            await message.answer("Этот номер карты уже зарегистрирован другим пользователем.")
-            return
+    # Проверяем, не занята ли уже эта карта кем-то другим
+    existing_user = await get_user_by_card(card_number)
+    if existing_user:
+        await message.answer("Этот номер карты уже зарегистрирован другим пользователем.")
+        return
 
-        await register_user(message.from_user.id, card_number)
-        await message.answer("Регистрация прошла успешно!", reply_markup=get_user_main_menu())
-        await state.clear()
-    else:
-        await message.answer("Этого номера карты нет в белом списке. Обратитесь к администратору.")
+    await register_user(message.from_user.id, card_number)
+    await message.answer("Регистрация прошла успешно!", reply_markup=get_user_main_menu())
+    await state.clear()
 
 @router.callback_query(F.data == "user_balance")
 async def show_balance(callback: CallbackQuery):
